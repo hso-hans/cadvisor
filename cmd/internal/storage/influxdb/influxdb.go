@@ -19,7 +19,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
-	"net/url"
+	/*"net/url"*/
 	"os"
 	"strings"
 	"sync"
@@ -27,9 +27,10 @@ import (
 
 	info "github.com/google/cadvisor/info/v1"
 	"github.com/google/cadvisor/storage"
-	"github.com/google/cadvisor/version"
+	/*"github.com/google/cadvisor/version"*/
 
-	influxdb "github.com/influxdb/influxdb/client"
+	/*influxdb "github.com/influxdb/influxdb/client"*/
+	influxdb "github.com/influxdata/influxdb/client/v2"
 )
 
 func init() {
@@ -39,7 +40,7 @@ func init() {
 var argDbRetentionPolicy = flag.String("storage_driver_influxdb_retention_policy", "", "retention policy")
 
 type influxdbStorage struct {
-	client          *influxdb.Client
+	client          influxdb.Client
 	cellIp          string
 	machineName     string
 	database        string
@@ -249,7 +250,7 @@ func newStorage(
 	isSecure bool,
 	bufferDuration time.Duration,
 ) (*influxdbStorage, error) {
-	url := &url.URL{
+	/*url := &url.URL{
 		Scheme: "http",
 		Host:   influxdbHost,
 	}
@@ -277,6 +278,26 @@ func newStorage(
 		bufferDuration:  bufferDuration,
 		lastWrite:       time.Now(),
 		points:          make([]*influxdb.Point, 0),
+	}
+	ret.readyToFlush = ret.defaultReadyToFlush
+	return ret, nil*/
+	// Make client
+	client, err := influxdb.NewUDPClient(influxdb.UDPConfig{
+		Addr: influxdbHost,
+		//PayloadSize: 4096,
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	ret := &influxdbStorage{
+		client:      client,
+		machineName: machineName,
+		cellIp:      cellIp,
+		database:    database,
+		lastWrite:   time.Now(),
+		points:      make([]*influxdb.Point, 0),
 	}
 	ret.readyToFlush = ret.defaultReadyToFlush
 	return ret, nil
@@ -369,10 +390,15 @@ func (s *influxdbStorage) containerFilesystemStatsToPoints(
 		fieldsFsUsage := map[string]interface{}{
 			fieldValue: float64(fsStat.Usage),
 		}
-		pointFsUsage := &influxdb.Point{
+		/*pointFsUsage := &influxdb.Point{
 			Measurement: serContainerMeausement,
 			Tags:        tagsFsUsage,
 			Fields:      fieldsFsUsage,
+		}*/
+		pointFsUsage, err := influxdb.NewPoint(serContainerMeausement, tagsFsUsage, fieldsFsUsage)
+		if err != nil {
+			fmt.Println(err)
+			/*glog.Fatalf("Failed to create NewPoint for FieldsFsUsage: %v", err)*/
 		}
 
 		tagsFsLimit := map[string]string{
@@ -385,10 +411,15 @@ func (s *influxdbStorage) containerFilesystemStatsToPoints(
 		fieldsFsLimit := map[string]interface{}{
 			fieldValue: float64(fsStat.Limit),
 		}
-		pointFsLimit := &influxdb.Point{
+		/*pointFsLimit := &influxdb.Point{
 			Measurement: serContainerMeausement,
 			Tags:        tagsFsLimit,
 			Fields:      fieldsFsLimit,
+		}*/
+		pointFsLimit, err := influxdb.NewPoint(serContainerMeausement, tagsFsLimit, fieldsFsLimit)
+		if err != nil {
+			fmt.Println(err)
+			/*glog.Fatalf("Failed to create NewPoint for FieldsFsLimit: %v", err)*/
 		}
 
 		points = append(points, pointFsUsage, pointFsLimit)
@@ -693,7 +724,7 @@ func (s *influxdbStorage) AddStats(cInfo *info.ContainerInfo, stats *info.Contai
 		}
 	}()
 	if len(pointsToFlush) > 0 {
-		points := make([]influxdb.Point, len(pointsToFlush))
+		/*points := make([]influxdb.Point, len(pointsToFlush))
 		for i, p := range pointsToFlush {
 			points[i] = *p
 		}
@@ -709,7 +740,38 @@ func (s *influxdbStorage) AddStats(cInfo *info.ContainerInfo, stats *info.Contai
 		response, err := s.client.Write(bp)
 		if err != nil || checkResponseForErrors(response) != nil {
 			return fmt.Errorf("failed to write stats to influxDb - %s", err)
+		}*/
+
+		/*ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		var stopChan chan bool = nil*/
+
+		bp, err := influxdb.NewBatchPoints(influxdb.BatchPointsConfig{
+			Database:  s.database,
+			Precision: "s",
+		})
+		if err != nil {
+			fmt.Println(err)
+			/*glog.Fatalf("Failed to create NewBatchPoint: %v", err)*/
 		}
+
+		//points := make([]influxdb.Point, len(pointsToFlush))
+		for _, p := range pointsToFlush {
+			//points[i] = *p
+			//fmt.Println("point to save at database ",self.database, i, p)
+			bp.AddPoint(p)
+		}
+		err = s.client.Write(bp)
+		if err != nil {
+			fmt.Println(err)
+			/*glog.Fatalf("Failed to send point to influxdb: %v", err)*/
+		}
+
+		/*select {
+		case <-ticker.C:
+		case <-stopChan:
+			return nil
+		}*/ //end select
 	}
 	return nil
 }
@@ -757,12 +819,19 @@ func makePoint(machineName, cellIp, containerName, name string, containerMetric 
 		}
 	}
 
-	return &influxdb.Point{
+	/*return &influxdb.Point{
 		//Measurement: name,
 		Measurement: serContainerMeausement,
 		Tags:        tags,
 		Fields:      fields,
+	}*/
+	mkPoint, err := influxdb.NewPoint(serContainerMeausement, tags, fields)
+	if err != nil {
+		fmt.Println(err)
+		/*glog.Fatalf("Failed to create NewPoint for FieldsFsLimit: %v", err)*/
 	}
+
+	return mkPoint
 }
 
 // Adds additional tags to the existing tags of a point
@@ -777,7 +846,7 @@ func makePoint(machineName, cellIp, containerName, name string, containerMetric 
 }*/
 
 // Checks response for possible errors
-func checkResponseForErrors(response *influxdb.Response) error {
+/*func checkResponseForErrors(response *influxdb.Response) error {
 	const msg = "failed to write stats to influxDb - %s"
 
 	if response != nil && response.Err != nil {
@@ -798,7 +867,7 @@ func checkResponseForErrors(response *influxdb.Response) error {
 		}
 	}
 	return nil
-}
+}*/
 
 // Some stats have type unsigned integer, but the InfluxDB client accepts only signed integers.
 func toSignedIfUnsigned(value interface{}) interface{} {
