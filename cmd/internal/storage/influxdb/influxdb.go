@@ -15,12 +15,23 @@
 package influxdb
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"io/ioutil"
+	/*"k8s.io/klog/v2"*/
+	"net/http"
+
+	/*"errors"*/
 	"flag"
 	"fmt"
+	/*"io/ioutil"*/
 	"net"
+	/*"net/http"*/
+
 	/*"net/url"*/
 	"os"
+	/*"os/exec"*/
 	"strings"
 	"sync"
 	"time"
@@ -327,47 +338,72 @@ const (
 
 // Container Metrics Metadata from REP (127.0.0.1:1800/v1/containers)
 func (self *influxdbStorage) containerMetricsMedataData() []ContainerMetricsMetadata {
-	/*client := &http.Client{
-		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
-			//dumpRequest(req)
-			return errors.New("No redirects")
-		},
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			DisableKeepAlives:   true,
-			TLSHandshakeTimeout: 10 * time.Second,
-		},
+	cafile := "/var/vcap/jobs/cadvisor/config/certs/rep/client.crt"
+	caCert, caCertErr := ioutil.ReadFile(cafile)
+	if caCertErr != nil {
+		fmt.Println("##### get Container Metrics Metadata caCertErr:", caCertErr)
+	}
+	caCertPool := x509.NewCertPool()
+	caCertPool.AppendCertsFromPEM(caCert)
+
+	certfile := "/var/vcap/jobs/cadvisor/config/certs/rep/client.crt"
+	keyfile := "/var/vcap/jobs/cadvisor/config/certs/rep/client.key"
+
+	cert, ceatErr := tls.LoadX509KeyPair(certfile, keyfile)
+	if ceatErr != nil {
+		fmt.Println("##### Failed to use the collector certificate and key:", ceatErr)
 	}
 
-	reqUrl := "http://127.0.0.1:1800/v1/containers"
-	req, err := http.NewRequest("GET", reqUrl, nil)
-	resp, err := client.Do(req)
-	if err != nil {
-		glog.Error("##### get Container Metrics Metadata request err:", err)
+	tlsConfig := &tls.Config{
+		Certificates:       []tls.Certificate{cert},
+		RootCAs:            caCertPool,
+		InsecureSkipVerify: true,
 	}
-	if resp != nil{
-		rawdata, _ := ioutil.ReadAll(resp.Body)*/
+	tlsConfig.BuildNameToCertificate()
 
-	//fmt.Println("##### Response Data :", string(rawdata))
+	transport := &http.Transport{
+		TLSClientConfig: tlsConfig,
+	}
+	client := http.Client{Transport: transport}
+	resp, respErr := client.Get("https://127.0.0.1:1800/v1/containers")
+	if respErr != nil {
+		fmt.Println("##### get Container Metrics Metadata respErr:", respErr)
+		//glog.Error("##### get Container Metrics Metadata request err:", err)
+	}
+	defer resp.Body.Close()
+	//fmt.Println("##### get Container Metrics Metadata resp:", resp)
+	//fmt.Println("##### get Container Metrics Metadata resp.Body:", resp.Body)
 
-	var containermetrics []ContainerMetricsMetadata
-	rawdata := []byte("[{\"limits\":{\"fds\":16384,\"mem\":1024,\"disk\":1024},\"usage_metrics\":{\"memory_usage_in_bytes\":274087936,\"disk_usage_in_bytes\":187248640,\"time_spent_in_cpu\":216069012908},\"container_id\":\"79d11846-aaea-43f1-6028-3175\",\"interface_id\":\"wfbsk3eo1lhl-0\",\"application_id\":\"83218601-1cf9-404f-92cd-18cf036eb6a2\",\"application_index\":\"0\",\"application_name\":\"spring-music-pinpoint\",\"application_uris\":[\"spring-music-pinpoint-daring-swan-ab.182.252.135.97.xip.io\"]},{\"limits\":{\"fds\":16384,\"mem\":1024,\"disk\":1024},\"usage_metrics\":{\"memory_usage_in_bytes\":253501440,\"disk_usage_in_bytes\":187248640,\"time_spent_in_cpu\":46535298391},\"container_id\":\"7cc87d12-acd0-404b-6b6e-/system.slice/memcached.service\",\"interface_id\":\"wfbsk3eo1lkk-0\",\"application_id\":\"e2a1ee68-7be7-4da5-bd64-34c1c85ccf19\",\"application_index\":\"0\",\"application_name\":\"spring-music-pinpoint-2\",\"application_uris\":[\"spring-music-pinpoint-2-friendly-klipspringer-ie.182.252.135.97.xip.io\"]}]")
-	json.Unmarshal(rawdata, &containermetrics)
+	bytes, _ := ioutil.ReadAll(resp.Body)
+	//str := string(bytes) // bytes -> string
+	//fmt.Println(str)
 
-	/*fmt.Println("##### Container Metrics Metadata :", containermetrics, len(containermetrics))
-	for _, metrics :=range containermetrics{
-		fmt.Println("##### Container Metrics container id :", metrics.Container_Id)
-		fmt.Println("##### Container Metrics app id :", metrics.Application_Id)
-		fmt.Println("##### Container Metrics app name :", metrics.Application_Name)
-		fmt.Println("##### Container Metrics app urls :", metrics.Application_Urls)
-		fmt.Println("##### Container Metrics app limits :", metrics.Limits)
-		fmt.Println("##### Container Metrics app usage-memory :", metrics.UsageMetrics.MemoryUsageInBytes)
-		fmt.Println("##### Container Metrics app usage-disk :", metrics.UsageMetrics.DiskUsageInBytes)
-		fmt.Println("##### Container Metrics app usage-cpu(second) :", metrics.UsageMetrics.TimeSpentInCPU.Seconds())
+	/*if err != nil {
+		fmt.Println("##### get Container Metrics Metadata request err:", err)
+		//glog.Error("##### get Container Metrics Metadata request err:", err)
 	}*/
+	if resp != nil {
+		//rawdata, _ := ioutil.ReadAll(resp.Body)
+		//fmt.Println("##### Response Data :", string(rawdata))
 
-	return containermetrics
-	//}
+		var containermetrics []ContainerMetricsMetadata
+		//rawdata := []byte("[{\"limits\":{\"fds\":16384,\"mem\":1024,\"disk\":1024},\"usage_metrics\":{\"memory_usage_in_bytes\":230674432,\"disk_usage_in_bytes\":173891584,\"time_spent_in_cpu\":29331153300},\"container_id\":\"770e2059-b934-4dfe-7871-e4f9\",\"interface_id\":\"wggd5cu4rlph-0\",\"application_id\":\"21ed5b0e-2cda-4b0f-8e9d-4fa5fbb80088\",\"application_index\":\"0\",\"application_name\":\"spring-music-pinpoint-1\",\"application_uris\":[\"spring-music-pinpoint-1-unexpected-tasmaniandevil-sf.182.252.135.97.xip.io\"]}]")
+		json.Unmarshal(bytes, &containermetrics)
+
+		/*fmt.Println("##### Container Metrics Metadata :", containermetrics, len(containermetrics))
+		for _, metrics :=range containermetrics{
+			fmt.Println("##### Container Metrics container id :", metrics.Container_Id)
+			fmt.Println("##### Container Metrics app id :", metrics.Application_Id)
+			fmt.Println("##### Container Metrics app name :", metrics.Application_Name)
+			fmt.Println("##### Container Metrics app urls :", metrics.Application_Urls)
+			fmt.Println("##### Container Metrics app limits :", metrics.Limits)
+			fmt.Println("##### Container Metrics app usage-memory :", metrics.UsageMetrics.MemoryUsageInBytes)
+			fmt.Println("##### Container Metrics app usage-disk :", metrics.UsageMetrics.DiskUsageInBytes)
+			fmt.Println("##### Container Metrics app usage-cpu(second) :", metrics.UsageMetrics.TimeSpentInCPU.Seconds())
+		}*/
+		fmt.Println("!@#$!%!@#%", containermetrics)
+		return containermetrics
+	}
 	return nil
 }
 
@@ -675,13 +711,21 @@ func (s *influxdbStorage) AddStats(cInfo *info.ContainerInfo, stats *info.Contai
 		s.lock.Lock()
 		defer s.lock.Unlock()
 
+		var containerName string
 		var containerMetric ContainerMetricsMetadata
+		if len(cInfo.Aliases) > 0 {
+			containerName = cInfo.Aliases[0]
+		} else {
+			containerName = cInfo.Name
+		}
 		//fmt.Println("================ containerName :", containerName)
+
+		// here, container id is seperation process, because need to containerMetricsMetadata function call control
 
 		//===================================================================
 		// Container Metrics Metadata from REP (127.0.0.1:1800/v1/containers)
 		containerMetrics := s.containerMetricsMedataData()
-		containerNames := strings.Split(cInfo.Name, "-")
+		containerNames := strings.Split(containerName, "-")
 		containerMetric.Container_Id = containerNames[len(containerNames)-1]
 		for _, metrics := range containerMetrics {
 			//fmt.Println("================ metrics:", metrics)
